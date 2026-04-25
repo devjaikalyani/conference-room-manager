@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "Conference Room Manager",
+    "slug": "conference-room-manager",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "crm-rws",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#040e1f"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "in.ritewater.crm"
+    },
+    "android": {
+      "package": "in.ritewater.crm"
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": []
+  }
+}

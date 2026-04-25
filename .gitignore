@@ -1,0 +1,38 @@
+# ── Database files ─────────────────────────────────────────────────────────────
+# Real .db files contain employee credentials and booking data — never commit them.
+# Use db_example/setup.py to create fresh databases for development.
+*.db
+*.db-wal
+*.db-shm
+
+# ── Python ─────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# ── Environment ────────────────────────────────────────────────────────────────
+.env
+.env.*
+*.env
+.env.local
+.env.*.local
+
+# ── Streamlit ──────────────────────────────────────────────────────────────────
+.streamlit/secrets.toml
+
+# ── Node / React Native ────────────────────────────────────────────────────────
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/.env
+
+# ── OS ─────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
