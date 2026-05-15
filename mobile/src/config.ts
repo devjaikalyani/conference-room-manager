@@ -7,4 +7,4 @@
 declare const process: { env: Record<string, string | undefined> };
 
 export const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_URL ?? 'http://192.168.10.215:8000';
+  process.env.EXPO_PUBLIC_API_URL ?? 'http://YOUR_LAN_IP:8000';

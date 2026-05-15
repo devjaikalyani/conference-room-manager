@@ -59,11 +59,11 @@ def setup_rooms_db():
     today = datetime.now().strftime("%Y-%m-%d")
     now   = datetime.now().isoformat()
     sample_bookings = [
-        (5, today, "09:00", "10:00", "Priya Sharma",  "Sprint planning", now),
-        (5, today, "14:00", "15:00", "Rahul Verma",   "Client call",     now),
-        (4, today, "10:00", "11:00", "Anita Desai",   "Design review",   now),
-        (3, today, "11:00", "12:00", "Suresh Nair",   "Team standup",    now),
-        (2, today, "15:00", "16:00", "Meena Pillai",  "HR interview",    now),
+        (5, today, "09:00", "10:00", "Sample User One",   "Sprint planning", now),
+        (5, today, "14:00", "15:00", "Sample User Two",   "Client call",     now),
+        (4, today, "10:00", "11:00", "Sample User Three", "Design review",   now),
+        (3, today, "11:00", "12:00", "Sample User Four",  "Team standup",    now),
+        (2, today, "15:00", "16:00", "Sample User Five",  "HR interview",    now),
     ]
     conn.executemany(
         "INSERT OR IGNORE INTO bookings (room_id,date,start_time,end_time,booked_by,purpose,booked_at) VALUES (?,?,?,?,?,?,?)",
@@ -122,14 +122,14 @@ def setup_crm_auth_db():
         )
     """)
 
-    # Sample employees — admin users match ADMIN_EMPLOYEE_IDS default in .env.example
+    # Sample employees — set ADMIN_EMPLOYEE_IDS in .env to define real admins
     sample_employees = [
-        ("RWSIPL001", "Priya Sharma",   "Pune", "Engineering", "Software Engineer",  False),
-        ("RWSIPL002", "Rahul Verma",    "Pune", "Engineering", "Team Lead",           False),
-        ("RWSIPL003", "Anita Desai",    "Pune", "Design",      "UI/UX Designer",      False),
-        ("RWSIPL004", "Suresh Nair",    "Pune", "Operations",  "Operations Manager",  False),
-        ("RWSIPL493", "Admin User",     "Pune", "Management",  "Manager",             True),
-        ("TRWSIPL834","Admin Two",      "Pune", "Management",  "Senior Manager",      True),
+        ("EMP001", "Sample User One",   "Branch A", "Engineering", "Software Engineer",  False),
+        ("EMP002", "Sample User Two",   "Branch A", "Engineering", "Team Lead",           False),
+        ("EMP003", "Sample User Three", "Branch A", "Design",      "UI/UX Designer",      False),
+        ("EMP004", "Sample User Four",  "Branch A", "Operations",  "Operations Manager",  False),
+        ("EMP005", "Admin User",        "Branch A", "Management",  "Manager",             True),
+        ("EMP006", "Admin Two",         "Branch A", "Management",  "Senior Manager",      True),
     ]
 
     for code, name, branch, dept, desig, is_admin in sample_employees:
@@ -159,5 +159,5 @@ if __name__ == "__main__":
     setup_rooms_db()
     setup_crm_auth_db()
     print("\nDone. Start the app with: python start.py")
-    print("Admin employees: RWSIPL493, TRWSIPL834  (set ADMIN_EMPLOYEE_IDS in .env to change)")
+    print("Set ADMIN_EMPLOYEE_IDS in .env to define admin employee codes.")
     print("\nNote: mobile_auth.db is retired. Both web and mobile now share crm_auth.db.")
