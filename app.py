@@ -4,9 +4,18 @@ Track availability and bookings for conference rooms.
 Session-based auth: email+password, email OTP, phone OTP, Google OAuth2, Zoho OAuth2.
 """
 import os
-import sqlite3
 import streamlit as st
+
+# Propagate Streamlit secrets → os.environ so auth.py can read them via os.getenv
+try:
+    for _k, _v in st.secrets.items():
+        if _k not in os.environ:
+            os.environ[_k] = str(_v)
+except Exception:
+    pass
+
 from datetime import datetime
+from supabase import create_client as _create_sb_client
 
 from utils.auth import (
     init_auth_db,
@@ -30,7 +39,13 @@ from utils.auth import (
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
-DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "conference_rooms.db")
+_sb_client = None
+
+def _sb():
+    global _sb_client
+    if _sb_client is None:
+        _sb_client = _create_sb_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+    return _sb_client
 
 ROOMS = {
     5: {"name": "5th Floor - Large Conference Room", "floor": 5, "size": "Large", "capacity": 20, "amenities": ["TV", "Whiteboard"]},
@@ -48,39 +63,8 @@ TIME_SLOTS = [
 
 # ── Database ───────────────────────────────────────────────────────────────────
 
-def get_db_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_FILE)
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
-
-
 def init_db() -> None:
-    with get_db_connection() as conn:
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS bookings (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                room_id    INTEGER NOT NULL,
-                date       TEXT    NOT NULL,
-                start_time TEXT    NOT NULL,
-                end_time   TEXT    NOT NULL,
-                booked_by  TEXT    NOT NULL,
-                purpose    TEXT,
-                booked_at  TEXT    NOT NULL,
-                UNIQUE(room_id, date, start_time, end_time)
-            )
-        ''')
-        conn.execute('CREATE INDEX IF NOT EXISTS idx_room_date ON bookings(room_id, date)')
-        conn.execute('CREATE INDEX IF NOT EXISTS idx_date      ON bookings(date)')
-        conn.execute('CREATE INDEX IF NOT EXISTS idx_booked_by ON bookings(booked_by)')
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS room_overrides (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                room_id       INTEGER NOT NULL UNIQUE,
-                reason        TEXT    NOT NULL DEFAULT 'Maintenance',
-                overridden_by TEXT    NOT NULL,
-                created_at    TEXT    NOT NULL
-            )
-        ''')
+    pass  # Schema lives in Supabase (supabase_schema.sql)
 
 
 # ── Time helpers ───────────────────────────────────────────────────────────────
@@ -101,29 +85,24 @@ def to_12hr(time_str: str) -> str:
 
 @st.cache_data(ttl=15)
 def get_bookings_for_date(room_id: int, date: str) -> list[dict]:
-    with get_db_connection() as conn:
-        rows = conn.execute(
-            '''SELECT id, start_time, end_time, booked_by, purpose, booked_at
-               FROM bookings WHERE room_id = ? AND date = ?
-               ORDER BY start_time''',
-            (room_id, date),
-        ).fetchall()
+    result = _sb().table("bookings").select(
+        "id, start_time, end_time, booked_by, purpose, booked_at"
+    ).eq("room_id", room_id).eq("date", date).order("start_time").execute()
     return [
-        {"id": r[0], "start_time": r[1], "end_time": r[2],
-         "booked_by": r[3], "purpose": r[4] or "", "booked_at": r[5]}
-        for r in rows
+        {"id": r["id"], "start_time": r["start_time"], "end_time": r["end_time"],
+         "booked_by": r["booked_by"], "purpose": r.get("purpose") or "", "booked_at": r["booked_at"]}
+        for r in (result.data or [])
     ]
 
 
 @st.cache_data(ttl=15)
 def get_active_override(room_id: int) -> dict | None:
-    with get_db_connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM room_overrides WHERE room_id = ?", (room_id,)
-        ).fetchone()
-    if not row:
+    result = _sb().table("room_overrides").select("*").eq("room_id", room_id).limit(1).execute()
+    if not result.data:
         return None
-    return {"room_id": row[1], "reason": row[2], "overridden_by": row[3], "created_at": row[4]}
+    row = result.data[0]
+    return {"room_id": row["room_id"], "reason": row["reason"],
+            "overridden_by": row["overridden_by"], "created_at": row["created_at"]}
 
 
 def get_current_status(room_id: int) -> tuple[str, dict | None]:
@@ -168,73 +147,62 @@ def get_conflicts(room_id: int, date: str, start_time: str, end_time: str) -> li
 def book_room(room_id: int, date: str, start_time: str, end_time: str,
               booked_by: str, purpose: str) -> bool:
     try:
-        with get_db_connection() as conn:
-            conn.execute(
-                '''INSERT INTO bookings
-                       (room_id, date, start_time, end_time, booked_by, purpose, booked_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                (room_id, date, to_24hr(start_time), to_24hr(end_time),
-                 booked_by, purpose, datetime.now().isoformat()),
-            )
+        _sb().table("bookings").insert({
+            "room_id":    room_id,
+            "date":       date,
+            "start_time": to_24hr(start_time),
+            "end_time":   to_24hr(end_time),
+            "booked_by":  booked_by,
+            "purpose":    purpose,
+            "booked_at":  datetime.now().isoformat(),
+        }).execute()
         st.cache_data.clear()
         return True
-    except sqlite3.IntegrityError:
+    except Exception:
         return False
 
 
 def cancel_booking(booking_id: int) -> bool:
-    with get_db_connection() as conn:
-        cursor = conn.execute("DELETE FROM bookings WHERE id = ?", (booking_id,))
+    result = _sb().table("bookings").delete().eq("id", booking_id).execute()
     st.cache_data.clear()
-    return cursor.rowcount > 0
+    return len(result.data) > 0
 
 
 def set_room_override(room_id: int, reason: str, overridden_by: str) -> None:
-    with get_db_connection() as conn:
-        conn.execute(
-            """INSERT INTO room_overrides (room_id, reason, overridden_by, created_at)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(room_id) DO UPDATE SET
-                   reason        = excluded.reason,
-                   overridden_by = excluded.overridden_by,
-                   created_at    = excluded.created_at""",
-            (room_id, reason.strip() or "Maintenance", overridden_by, datetime.now().isoformat()),
-        )
+    _sb().table("room_overrides").upsert({
+        "room_id":       room_id,
+        "reason":        reason.strip() or "Maintenance",
+        "overridden_by": overridden_by,
+        "created_at":    datetime.now().isoformat(),
+    }, on_conflict="room_id").execute()
     st.cache_data.clear()
 
 
 def clear_room_override(room_id: int) -> None:
-    with get_db_connection() as conn:
-        conn.execute("DELETE FROM room_overrides WHERE room_id = ?", (room_id,))
+    _sb().table("room_overrides").delete().eq("room_id", room_id).execute()
     st.cache_data.clear()
 
 
 def search_bookings(booked_by=None, room_id=None,
                     date_from=None, date_to=None) -> list[dict]:
-    query = '''SELECT id, room_id, date, start_time, end_time,
-                      booked_by, purpose, booked_at
-               FROM bookings WHERE 1=1'''
-    params: list = []
+    q = _sb().table("bookings").select(
+        "id, room_id, date, start_time, end_time, booked_by, purpose, booked_at"
+    )
     if booked_by:
-        query += " AND booked_by LIKE ?"
-        params.append(f"%{booked_by}%")
+        q = q.ilike("booked_by", f"%{booked_by}%")
     if room_id:
-        query += " AND room_id = ?"
-        params.append(room_id)
+        q = q.eq("room_id", room_id)
     if date_from:
-        query += " AND date >= ?"
-        params.append(date_from)
+        q = q.gte("date", date_from)
     if date_to:
-        query += " AND date <= ?"
-        params.append(date_to)
-    query += " ORDER BY date DESC, start_time"
-
-    with get_db_connection() as conn:
-        rows = conn.execute(query, params).fetchall()
+        q = q.lte("date", date_to)
+    result = q.order("date", desc=True).order("start_time").execute()
     return [
-        {"id": r[0], "room_id": r[1], "date": r[2], "start_time": r[3],
-         "end_time": r[4], "booked_by": r[5], "purpose": r[6] or "", "booked_at": r[7]}
-        for r in rows
+        {"id": r["id"], "room_id": r["room_id"], "date": r["date"],
+         "start_time": r["start_time"], "end_time": r["end_time"],
+         "booked_by": r["booked_by"], "purpose": r.get("purpose") or "",
+         "booked_at": r["booked_at"]}
+        for r in (result.data or [])
     ]
 
 

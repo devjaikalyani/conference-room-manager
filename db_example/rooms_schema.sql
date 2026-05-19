@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS room_overrides (
 
 -- Sample bookings (adjust dates as needed)
 INSERT OR IGNORE INTO bookings (room_id, date, start_time, end_time, booked_by, purpose, booked_at) VALUES
-    (5, date('now'), '09:00', '10:00', 'Sample User One',   'Sprint planning',   datetime('now')),
-    (5, date('now'), '14:00', '15:00', 'Sample User Two',   'Client call',       datetime('now')),
-    (4, date('now'), '10:00', '11:00', 'Sample User Three', 'Design review',     datetime('now')),
-    (3, date('now'), '11:00', '12:00', 'Sample User Four',  'Team standup',      datetime('now')),
-    (2, date('now'), '15:00', '16:00', 'Sample User Five',  'HR interview',      datetime('now'));
+    (5, date('now'), '09:00', '10:00', 'Priya Sharma',   'Sprint planning',   datetime('now')),
+    (5, date('now'), '14:00', '15:00', 'Rahul Verma',    'Client call',       datetime('now')),
+    (4, date('now'), '10:00', '11:00', 'Anita Desai',    'Design review',     datetime('now')),
+    (3, date('now'), '11:00', '12:00', 'Suresh Nair',    'Team standup',      datetime('now')),
+    (2, date('now'), '15:00', '16:00', 'Meena Pillai',   'HR interview',      datetime('now'));

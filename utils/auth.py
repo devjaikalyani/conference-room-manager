@@ -1,20 +1,20 @@
 """
-Authentication backend for Conference Room Manager.
+Authentication backend for Conference Room Manager — Supabase edition.
 
 Supported sign-in methods:
   - Email + Password
-  - Email OTP     (SMTP — Gmail / Zoho SMTP / any SMTP)
+  - Email OTP     (SMTP — Zoho SMTP / any SMTP)
   - Phone OTP     (Twilio — demo mode if credentials absent)
   - Google OAuth2 (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)
   - Zoho OAuth2   (ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET)
 
-Required .env variables (all optional — app runs in demo mode without them):
+Required env / Streamlit secrets:
+  SUPABASE_URL / SUPABASE_KEY
   SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / SMTP_FROM
-  TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM_NUMBER
-  GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET
-  ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET
+  TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM_NUMBER  (optional)
+  GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET                      (optional)
+  ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET                         (optional)
   SESSION_TTL_HOURS  (default 24)
-  AUTH_DB_PATH       (default: <project root>/crm_auth.db)
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ import os
 import random
 import secrets
 import smtplib
-import sqlite3
 import string
 import urllib.parse
 import urllib.request
@@ -37,109 +36,67 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from dotenv import load_dotenv
+from supabase import create_client, Client as _SupabaseClient
 
-# ── Paths & constants ──────────────────────────────────────────────────────────
+# ── Load .env files (local dev) ────────────────────────────────────────────────
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-load_dotenv(Path(_ROOT).parent / ".env.shared")       # shared workspace credentials
-load_dotenv(Path(_ROOT) / ".env", override=True)      # project-specific overrides
-_DEFAULT_DB = os.path.join(_ROOT, "crm_auth.db")
+load_dotenv(Path(_ROOT).parent / ".env.shared")
+load_dotenv(Path(_ROOT) / ".env", override=True)
 
 OTP_EXPIRY_MIN = 10
 SESSION_TTL_H  = int(os.getenv("SESSION_TTL_HOURS", "24"))
 
 
-# ── Database ───────────────────────────────────────────────────────────────────
+# ── Supabase client (lazy singleton) ──────────────────────────────────────────
 
-def _db(path: str | None = None) -> sqlite3.Connection:
-    p = path or os.getenv("AUTH_DB_PATH", _DEFAULT_DB)
-    conn = sqlite3.connect(p, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+_client: Optional[_SupabaseClient] = None
 
+
+def _sb() -> _SupabaseClient:
+    global _client
+    if _client is None:
+        url = os.getenv("SUPABASE_URL", "")
+        key = os.getenv("SUPABASE_KEY", "")
+        if not url or not key:
+            raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set in secrets or .env")
+        _client = create_client(url, key)
+    return _client
+
+
+# ── Row helper ─────────────────────────────────────────────────────────────────
+
+def _safe(row: Dict) -> Dict:
+    d = dict(row)
+    d.pop("password_hash", None)
+    return d
+
+
+# ── Schema / migration stubs (schema lives in Supabase SQL editor) ─────────────
 
 def init_auth_db(path: str | None = None) -> None:
-    """Create auth tables if they do not exist (idempotent)."""
-    with _db(path) as conn:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS users (
-                id                   TEXT    PRIMARY KEY,
-                employee_id          TEXT    UNIQUE NOT NULL,
-                name                 TEXT    NOT NULL,
-                email                TEXT    UNIQUE,
-                phone                TEXT    UNIQUE,
-                password_hash        TEXT,
-                google_id            TEXT    UNIQUE,
-                zoho_id              TEXT    UNIQUE,
-                is_active            INTEGER DEFAULT 1,
-                is_admin             INTEGER DEFAULT 0,
-                branch               TEXT    DEFAULT '',
-                department           TEXT    DEFAULT '',
-                designation          TEXT    DEFAULT '',
-                must_change_password INTEGER DEFAULT 0,
-                created_at           TEXT    DEFAULT CURRENT_TIMESTAMP,
-                last_login           TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS otp_codes (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                identifier  TEXT NOT NULL,
-                code        TEXT NOT NULL,
-                purpose     TEXT NOT NULL DEFAULT 'login',
-                expires_at  TEXT NOT NULL,
-                used        INTEGER DEFAULT 0,
-                created_at  TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_otp
-                ON otp_codes(identifier, purpose, used);
-
-            CREATE TABLE IF NOT EXISTS sessions (
-                token       TEXT PRIMARY KEY,
-                user_id     TEXT NOT NULL,
-                expires_at  TEXT NOT NULL,
-                created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_sess_user
-                ON sessions(user_id);
-        """)
+    pass
 
 
 def migrate_auth_db(path: str | None = None) -> None:
-    """Add columns introduced after initial schema (safe to call every startup)."""
-    with _db(path) as conn:
-        cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
-        migrations = {
-            "is_admin":             "INTEGER DEFAULT 0",
-            "branch":               "TEXT DEFAULT ''",
-            "department":           "TEXT DEFAULT ''",
-            "designation":          "TEXT DEFAULT ''",
-            "must_change_password": "INTEGER DEFAULT 0",
-        }
-        for col, col_def in migrations.items():
-            if col not in cols:
-                conn.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
+    pass
 
+
+# ── Admin flags ────────────────────────────────────────────────────────────────
 
 def sync_admin_flags(path: str | None = None) -> None:
-    """Set is_admin=1 for every employee_id listed in ADMIN_EMPLOYEE_IDS env var."""
     raw = os.getenv("ADMIN_EMPLOYEE_IDS", "").strip()
     if not raw:
         return
     ids = [e.strip() for e in raw.split(",") if e.strip()]
-    if not ids:
-        return
-    placeholders = ",".join("?" * len(ids))
-    with _db(path) as conn:
-        conn.execute(
-            f"UPDATE users SET is_admin=1 WHERE employee_id IN ({placeholders})",
-            ids,
-        )
+    for emp_id in ids:
+        try:
+            _sb().table("users").update({"is_admin": 1}).eq("employee_id", emp_id).execute()
+        except Exception:
+            pass
 
 
-# ── Employee seeding (called by backend on startup) ───────────────────────────
+# ── Employee seeding ──────────────────────────────────────────────────────────
 
 def seed_employee(
     employee_id:  str,
@@ -149,103 +106,83 @@ def seed_employee(
     designation:  str = "",
     path: str | None = None,
 ) -> None:
-    """Insert an employee with a default password (= employee_id) if not yet present."""
     employee_id = employee_id.strip().upper()
     if not employee_id or not name:
         return
-    with _db(path) as conn:
-        if conn.execute(
-            "SELECT 1 FROM users WHERE employee_id = ?", (employee_id,)
-        ).fetchone():
-            return
-        user_id = secrets.token_hex(16)
-        dk, salt = _hash_pw(employee_id)
-        pw_stored = f"{salt}:{dk}"
-        try:
-            conn.execute(
-                """INSERT INTO users
-                   (id, employee_id, name, branch, department, designation,
-                    password_hash, must_change_password)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
-                (user_id, employee_id, name,
-                 branch.strip(), department.strip(), designation.strip(),
-                 pw_stored),
-            )
-        except sqlite3.IntegrityError:
-            pass  # duplicate inserted by concurrent worker — safe to ignore
+    existing = _sb().table("users").select("id").eq("employee_id", employee_id).limit(1).execute()
+    if existing.data:
+        return
+    user_id = secrets.token_hex(16)
+    dk, salt = _hash_pw(employee_id)
+    pw_stored = f"{salt}:{dk}"
+    try:
+        _sb().table("users").insert({
+            "id":                   user_id,
+            "employee_id":          employee_id,
+            "name":                 name,
+            "branch":               branch.strip(),
+            "department":           department.strip(),
+            "designation":          designation.strip(),
+            "password_hash":        pw_stored,
+            "must_change_password": 1,
+            "created_at":           datetime.now().isoformat(),
+        }).execute()
+    except Exception:
+        pass
 
 
 # ── User helpers ───────────────────────────────────────────────────────────────
-
-def _safe(row: sqlite3.Row | Dict) -> Dict:
-    d = dict(row)
-    d.pop("password_hash", None)
-    return d
-
 
 def get_user(field: str, value: str, path: str | None = None) -> Optional[Dict]:
     allowed = {"id", "employee_id", "email", "phone", "google_id", "zoho_id"}
     if field not in allowed:
         raise ValueError(f"field must be one of {allowed}")
-    with _db(path) as conn:
-        row = conn.execute(
-            f"SELECT * FROM users WHERE {field} = ? AND is_active = 1 LIMIT 1",
-            (value,),
-        ).fetchone()
-    return _safe(row) if row else None
+    result = _sb().table("users").select("*").eq(field, value).eq("is_active", 1).limit(1).execute()
+    return _safe(result.data[0]) if result.data else None
 
 
 def update_user(
     user_id: str,
-    fields: Dict[str, Any],
+    fields:  Dict[str, Any],
     path: str | None = None,
 ) -> Dict[str, Any]:
     allowed = {"name", "email", "phone", "password"}
-    updates = {}
+    updates: Dict[str, Any] = {}
 
     for k, v in fields.items():
-        if k not in allowed:
-            continue
-        if v is None:
+        if k not in allowed or v is None:
             continue
         v = str(v).strip()
         if not v:
             continue
         if k == "password":
-            salt = secrets.token_hex(16)
+            salt   = secrets.token_hex(16)
             hashed = hashlib.pbkdf2_hmac("sha256", v.encode(), salt.encode(), 260_000)
             updates["password_hash"] = salt + ":" + hashed.hex()
         else:
-            updates[k] = v.lower() if k in ("email",) else v
+            updates[k] = v.lower() if k == "email" else v
 
     if not updates:
         return {"error": "Nothing to update."}
 
-    with _db(path) as conn:
-        for col in ("email", "phone"):
-            if col not in updates:
-                continue
-            conflict = conn.execute(
-                f"SELECT id FROM users WHERE {col} = ? AND id != ? AND is_active = 1",
-                (updates[col], user_id),
-            ).fetchone()
-            if conflict:
-                return {"error": f"That {col} is already registered to another account."}
+    for col in ("email", "phone"):
+        if col not in updates:
+            continue
+        clash = _sb().table("users").select("id").eq(col, updates[col]).eq("is_active", 1).neq("id", user_id).limit(1).execute()
+        if clash.data:
+            return {"error": f"That {col} is already registered to another account."}
 
-        set_clause = ", ".join(f"{col} = ?" for col in updates)
-        values     = list(updates.values()) + [user_id]
-        conn.execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)
-        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-
-    return {"success": True, "user": _safe(row)} if row else {"error": "User not found."}
+    result = _sb().table("users").update(updates).eq("id", user_id).execute()
+    if result.data:
+        return {"success": True, "user": _safe(result.data[0])}
+    return {"error": "User not found."}
 
 
 def _touch(user_id: str, path: str | None = None) -> None:
-    with _db(path) as conn:
-        conn.execute(
-            "UPDATE users SET last_login = ? WHERE id = ?",
-            (datetime.now().isoformat(), user_id),
-        )
+    try:
+        _sb().table("users").update({"last_login": datetime.now().isoformat()}).eq("id", user_id).execute()
+    except Exception:
+        pass
 
 
 # ── Session management ─────────────────────────────────────────────────────────
@@ -253,43 +190,45 @@ def _touch(user_id: str, path: str | None = None) -> None:
 def create_session(user_id: str, path: str | None = None) -> str:
     token = secrets.token_urlsafe(32)
     exp   = (datetime.now() + timedelta(hours=SESSION_TTL_H)).isoformat()
-    with _db(path) as conn:
-        conn.execute(
-            "DELETE FROM sessions WHERE user_id = ? AND expires_at < ?",
-            (user_id, datetime.now().isoformat()),
-        )
-        conn.execute(
-            "INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)",
-            (token, user_id, exp),
-        )
+    try:
+        _sb().table("sessions").delete().eq("user_id", user_id).lt("expires_at", datetime.now().isoformat()).execute()
+    except Exception:
+        pass
+    _sb().table("sessions").insert({
+        "token":      token,
+        "user_id":    user_id,
+        "expires_at": exp,
+        "created_at": datetime.now().isoformat(),
+    }).execute()
     return token
 
 
 def get_user_by_session(token: str | None, path: str | None = None) -> Optional[Dict]:
     if not token:
         return None
-    with _db(path) as conn:
-        row = conn.execute(
-            """SELECT u.* FROM sessions s
-               JOIN users u ON u.id = s.user_id
-               WHERE s.token = ? AND s.expires_at > ? AND u.is_active = 1""",
-            (token, datetime.now().isoformat()),
-        ).fetchone()
-    return _safe(row) if row else None
+    now = datetime.now().isoformat()
+    sess = _sb().table("sessions").select("user_id, expires_at").eq("token", token).gt("expires_at", now).limit(1).execute()
+    if not sess.data:
+        return None
+    user_id = sess.data[0]["user_id"]
+    result  = _sb().table("users").select("*").eq("id", user_id).eq("is_active", 1).limit(1).execute()
+    return _safe(result.data[0]) if result.data else None
 
 
 def logout_session(token: str | None, path: str | None = None) -> None:
     if not token:
         return
-    with _db(path) as conn:
-        conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+    try:
+        _sb().table("sessions").delete().eq("token", token).execute()
+    except Exception:
+        pass
 
 
 # ── Password helpers ───────────────────────────────────────────────────────────
 
 def verify_password(plain: str, stored_hash: str) -> bool:
-    """Public helper — verify a plain password against a stored hash from this module."""
     return _verify_pw(plain, stored_hash)
+
 
 def _hash_pw(password: str, salt: str = "") -> Tuple[str, str]:
     if not salt:
@@ -316,44 +255,43 @@ def _gen_otp() -> str:
 def _store_otp(identifier: str, code: str, purpose: str = "login",
                path: str | None = None) -> None:
     exp = (datetime.now() + timedelta(minutes=OTP_EXPIRY_MIN)).isoformat()
-    with _db(path) as conn:
-        conn.execute(
-            "UPDATE otp_codes SET used = 1 WHERE identifier = ? AND purpose = ? AND used = 0",
-            (identifier, purpose),
-        )
-        conn.execute(
-            "INSERT INTO otp_codes (identifier, code, purpose, expires_at) VALUES (?,?,?,?)",
-            (identifier, code, purpose, exp),
-        )
+    try:
+        _sb().table("otp_codes").update({"used": 1}).eq("identifier", identifier).eq("purpose", purpose).eq("used", 0).execute()
+    except Exception:
+        pass
+    _sb().table("otp_codes").insert({
+        "identifier": identifier,
+        "code":       code,
+        "purpose":    purpose,
+        "expires_at": exp,
+        "used":       0,
+        "created_at": datetime.now().isoformat(),
+    }).execute()
 
 
 def _verify_otp_code(identifier: str, code: str, purpose: str = "login",
                      path: str | None = None) -> Dict[str, Any]:
-    with _db(path) as conn:
-        row = conn.execute(
-            """SELECT * FROM otp_codes
-               WHERE identifier = ? AND code = ? AND purpose = ? AND used = 0
-               ORDER BY created_at DESC LIMIT 1""",
-            (identifier, code, purpose),
-        ).fetchone()
-    if not row:
+    result = _sb().table("otp_codes").select("*").eq("identifier", identifier).eq("code", code).eq("purpose", purpose).eq("used", 0).order("created_at", desc=True).limit(1).execute()
+    if not result.data:
         return {"error": "Invalid OTP. Please try again."}
-    row = dict(row)
+    row = result.data[0]
     if datetime.fromisoformat(row["expires_at"]) < datetime.now():
-        return {"error": f"OTP has expired. Please request a new one."}
-    with _db(path) as conn:
-        conn.execute("UPDATE otp_codes SET used = 1 WHERE id = ?", (row["id"],))
+        return {"error": "OTP has expired. Please request a new one."}
+    try:
+        _sb().table("otp_codes").update({"used": 1}).eq("id", row["id"]).execute()
+    except Exception:
+        pass
     return {"ok": True}
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
 
 def register_user(
-    name: str,
+    name:        str,
     employee_id: str,
-    email: str = "",
-    phone: str = "",
-    password: str = "",
+    email:       str = "",
+    phone:       str = "",
+    password:    str = "",
     path: str | None = None,
 ) -> Dict[str, Any]:
     name        = name.strip()
@@ -370,78 +308,70 @@ def register_user(
 
     pw_stored = None
     if password:
-        dk, salt = _hash_pw(password)
+        dk, salt  = _hash_pw(password)
         pw_stored = f"{salt}:{dk}"
 
-    existing = get_user("employee_id", employee_id, path)
+    existing = get_user("employee_id", employee_id)
     if existing:
         has_contact = existing.get("email") or existing.get("phone")
         if has_contact:
             return {"error": "This Employee ID is already registered. Please sign in instead."}
 
-        updates: list = []
-        params:  list = []
+        updates: Dict[str, Any] = {}
         if email:
-            clash = get_user("email", email, path)
+            clash = get_user("email", email)
             if clash and clash["id"] != existing["id"]:
                 return {"error": "This email is already used by another account."}
-            updates.append("email = ?")
-            params.append(email)
+            updates["email"] = email
         if phone:
-            clash = get_user("phone", phone, path)
+            clash = get_user("phone", phone)
             if clash and clash["id"] != existing["id"]:
                 return {"error": "This phone number is already used by another account."}
-            updates.append("phone = ?")
-            params.append(phone)
+            updates["phone"] = phone
         if pw_stored:
-            updates.append("password_hash = ?")
-            params.append(pw_stored)
+            updates["password_hash"] = pw_stored
         if name and name != existing.get("name", ""):
-            updates.append("name = ?")
-            params.append(name)
+            updates["name"] = name
 
         if updates:
-            params.append(existing["id"])
-            with _db(path) as conn:
-                conn.execute(
-                    f"UPDATE users SET {', '.join(updates)} WHERE id = ?",
-                    params,
-                )
+            _sb().table("users").update(updates).eq("id", existing["id"]).execute()
 
-        _touch(existing["id"], path)
-        user  = get_user("id", existing["id"], path)
-        token = create_session(existing["id"], path)
+        _touch(existing["id"])
+        user  = get_user("id", existing["id"])
+        token = create_session(existing["id"])
         return {"success": True, "user": user, "token": token, "activated": True}
 
     user_id = secrets.token_hex(16)
     try:
-        with _db(path) as conn:
-            conn.execute(
-                """INSERT INTO users
-                   (id, employee_id, name, email, phone, password_hash)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (user_id, employee_id, name, email, phone, pw_stored),
-            )
-    except sqlite3.IntegrityError as exc:
-        msg = str(exc)
+        _sb().table("users").insert({
+            "id":           user_id,
+            "employee_id":  employee_id,
+            "name":         name,
+            "email":        email,
+            "phone":        phone,
+            "password_hash": pw_stored,
+            "created_at":   datetime.now().isoformat(),
+        }).execute()
+    except Exception as exc:
+        msg = str(exc).lower()
         if "email" in msg:
             return {"error": "This email is already registered."}
         if "phone" in msg:
             return {"error": "This phone number is already registered."}
         return {"error": f"Registration failed: {exc}"}
 
-    user  = get_user("id", user_id, path)
-    token = create_session(user_id, path)
+    user  = get_user("id", user_id)
+    token = create_session(user_id)
     return {"success": True, "user": user, "token": token}
 
 
 def complete_oauth_registration(
-    name: str,
+    name:        str,
     employee_id: str,
-    email: str = "",
-    phone: str = "",
-    google_id: str = "",
-    zoho_id: str = "",
+    email:       str = "",
+    phone:       str = "",
+    google_id:   str = "",
+    zoho_id:     str = "",
     path: str | None = None,
 ) -> Dict[str, Any]:
     name        = name.strip()
@@ -454,25 +384,27 @@ def complete_oauth_registration(
 
     user_id = secrets.token_hex(16)
     try:
-        with _db(path) as conn:
-            conn.execute(
-                """INSERT INTO users
-                   (id, employee_id, name, email, phone, google_id, zoho_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (user_id, employee_id, name, email, phone,
-                 google_id or None, zoho_id or None),
-            )
-    except sqlite3.IntegrityError as exc:
-        msg = str(exc)
+        _sb().table("users").insert({
+            "id":          user_id,
+            "employee_id": employee_id,
+            "name":        name,
+            "email":       email,
+            "phone":       phone,
+            "google_id":   google_id or None,
+            "zoho_id":     zoho_id   or None,
+            "created_at":  datetime.now().isoformat(),
+        }).execute()
+    except Exception as exc:
+        msg = str(exc).lower()
         if "employee_id" in msg:
             return {"error": "Employee ID is already registered."}
         if "email" in msg:
             return {"error": "This email is already registered."}
         return {"error": f"Registration failed: {exc}"}
 
-    _touch(user_id, path)
-    user  = get_user("id", user_id, path)
-    token = create_session(user_id, path)
+    _touch(user_id)
+    user  = get_user("id", user_id)
+    token = create_session(user_id)
     return {"success": True, "user": user, "token": token}
 
 
@@ -481,41 +413,38 @@ def complete_oauth_registration(
 def login_password(identifier: str, password: str,
                    path: str | None = None) -> Dict[str, Any]:
     identifier = identifier.strip()
-    user = get_user("email", identifier.lower(), path)
+    user = get_user("email", identifier.lower())
     if not user:
-        user = get_user("employee_id", identifier.upper(), path)
+        user = get_user("employee_id", identifier.upper())
     if not user:
         return {"error": "No account found with that email or Employee ID."}
 
-    stored = user.get("password_hash") or _raw_pw(user["id"], path)
+    stored = _raw_pw(user["id"])
     if not stored:
         return {"error": "This account has no password set. "
                          "Please sign in with OTP, Google, or Zoho."}
     if not _verify_pw(password, stored):
         return {"error": "Incorrect password."}
 
-    _touch(user["id"], path)
-    token = create_session(user["id"], path)
+    _touch(user["id"])
+    token = create_session(user["id"])
     return {"success": True, "user": user, "token": token}
 
 
 def _raw_pw(user_id: str, path: str | None = None) -> str:
-    with _db(path) as conn:
-        row = conn.execute(
-            "SELECT password_hash FROM users WHERE id = ?", (user_id,)
-        ).fetchone()
-    return row["password_hash"] if row else ""
+    result = _sb().table("users").select("password_hash").eq("id", user_id).limit(1).execute()
+    return (result.data[0].get("password_hash") or "") if result.data else ""
 
 
 # ── Email OTP ──────────────────────────────────────────────────────────────────
 
 def send_email_otp(email: str, path: str | None = None) -> Dict[str, Any]:
     email = email.strip().lower()
-    if not get_user("email", email, path):
+    if not get_user("email", email):
         return {"error": "No account found with this email. Please register first."}
 
-    otp = _gen_otp()
-    _store_otp(email, otp, "login", path)
+    otp  = _gen_otp()
+    _store_otp(email, otp, "login")
 
     host = os.getenv("SMTP_HOST", "smtp.gmail.com")
     port = int(os.getenv("SMTP_PORT", "587"))
@@ -527,10 +456,10 @@ def send_email_otp(email: str, path: str | None = None) -> Dict[str, Any]:
         print(f"[AUTH DEMO] Email OTP for {email}: {otp}  (expires {OTP_EXPIRY_MIN} min)")
         return {"success": True, "demo": True, "otp": otp}
 
-    msg             = MIMEMultipart("alternative")
-    msg["Subject"]  = "Your sign-in OTP — Conference Room Manager"
-    msg["From"]     = frm
-    msg["To"]       = email
+    msg            = MIMEMultipart("alternative")
+    msg["Subject"] = "Your sign-in OTP — Conference Room Manager"
+    msg["From"]    = frm
+    msg["To"]      = email
     html = f"""<html><body style="font-family:DM Sans,sans-serif;max-width:480px;
         margin:40px auto;padding:0 20px">
       <div style="border-radius:20px;background:#040e1f;padding:32px 28px">
@@ -555,9 +484,7 @@ def send_email_otp(email: str, path: str | None = None) -> Dict[str, Any]:
 
     try:
         with smtplib.SMTP(host, port, timeout=15) as s:
-            s.ehlo()
-            s.starttls()
-            s.login(user, pw)
+            s.ehlo(); s.starttls(); s.login(user, pw)
             s.sendmail(frm, email, msg.as_string())
         return {"success": True}
     except Exception as exc:
@@ -567,14 +494,14 @@ def send_email_otp(email: str, path: str | None = None) -> Dict[str, Any]:
 def login_email_otp(email: str, code: str,
                     path: str | None = None) -> Dict[str, Any]:
     email = email.strip().lower()
-    res = _verify_otp_code(email, code, "login", path)
+    res   = _verify_otp_code(email, code, "login")
     if res.get("error"):
         return res
-    user = get_user("email", email, path)
+    user = get_user("email", email)
     if not user:
         return {"error": "No account found for this email."}
-    _touch(user["id"], path)
-    token = create_session(user["id"], path)
+    _touch(user["id"])
+    token = create_session(user["id"])
     return {"success": True, "user": user, "token": token}
 
 
@@ -582,17 +509,17 @@ def login_email_otp(email: str, code: str,
 
 def send_phone_otp(phone: str, path: str | None = None) -> Dict[str, Any]:
     phone = phone.strip()
-    if not get_user("phone", phone, path):
+    if not get_user("phone", phone):
         return {"error": "No account found with this phone number. Please register first."}
 
     otp = _gen_otp()
-    _store_otp(phone, otp, "login", path)
+    _store_otp(phone, otp, "login")
 
     sid = os.getenv("TWILIO_ACCOUNT_SID", "")
     tok = os.getenv("TWILIO_AUTH_TOKEN", "")
     frm = os.getenv("TWILIO_FROM_NUMBER", "")
 
-    if not sid or not tok:
+    if not sid or not tok or sid.startswith("AC" + "x"):
         print(f"[AUTH DEMO] SMS OTP for {phone}: {otp}  (expires {OTP_EXPIRY_MIN} min)")
         return {"success": True, "demo": True, "otp": otp}
 
@@ -600,8 +527,7 @@ def send_phone_otp(phone: str, path: str | None = None) -> Dict[str, Any]:
         from twilio.rest import Client  # type: ignore
         Client(sid, tok).messages.create(
             body=f"Conference Rooms OTP: {otp} (valid {OTP_EXPIRY_MIN} min). Do not share.",
-            from_=frm,
-            to=phone,
+            from_=frm, to=phone,
         )
         return {"success": True}
     except ImportError:
@@ -614,14 +540,14 @@ def send_phone_otp(phone: str, path: str | None = None) -> Dict[str, Any]:
 def login_phone_otp(phone: str, code: str,
                     path: str | None = None) -> Dict[str, Any]:
     phone = phone.strip()
-    res = _verify_otp_code(phone, code, "login", path)
+    res   = _verify_otp_code(phone, code, "login")
     if res.get("error"):
         return res
-    user = get_user("phone", phone, path)
+    user = get_user("phone", phone)
     if not user:
         return {"error": "No account found for this phone number."}
-    _touch(user["id"], path)
-    token = create_session(user["id"], path)
+    _touch(user["id"])
+    token = create_session(user["id"])
     return {"success": True, "user": user, "token": token}
 
 
@@ -632,7 +558,7 @@ def google_auth_url(redirect_uri: str, theme: str = "Dark") -> str:
     if not client_id:
         return ""
     safe_theme = theme if theme in ("Dark", "Light", "System") else "Dark"
-    state = f"google_{safe_theme}_{secrets.token_urlsafe(12)}"
+    state  = f"google_{safe_theme}_{secrets.token_urlsafe(12)}"
     params = urllib.parse.urlencode({
         "client_id":     client_id,
         "redirect_uri":  redirect_uri,
@@ -652,16 +578,11 @@ def google_callback(code: str, redirect_uri: str,
         return {"error": "Google OAuth is not configured on this server."}
 
     body = urllib.parse.urlencode({
-        "code":          code,
-        "client_id":     client_id,
-        "client_secret": client_secret,
-        "redirect_uri":  redirect_uri,
-        "grant_type":    "authorization_code",
+        "code": code, "client_id": client_id, "client_secret": client_secret,
+        "redirect_uri": redirect_uri, "grant_type": "authorization_code",
     }).encode()
     try:
-        req = urllib.request.Request(
-            "https://oauth2.googleapis.com/token", data=body, method="POST"
-        )
+        req = urllib.request.Request("https://oauth2.googleapis.com/token", data=body, method="POST")
         req.add_header("Content-Type", "application/x-www-form-urlencoded")
         with urllib.request.urlopen(req, timeout=15) as r:
             token_info = json.loads(r.read())
@@ -684,17 +605,13 @@ def google_callback(code: str, redirect_uri: str,
     email     = (ginfo.get("email") or "").strip().lower()
     name      = ginfo.get("name", "")
 
-    user = (get_user("google_id", google_id, path) if google_id else None) or \
-           (get_user("email",     email,     path) if email     else None)
+    user = (get_user("google_id", google_id) if google_id else None) or \
+           (get_user("email",     email)     if email     else None)
     if user:
         if not user.get("google_id") and google_id:
-            with _db(path) as conn:
-                conn.execute(
-                    "UPDATE users SET google_id = ? WHERE id = ?",
-                    (google_id, user["id"]),
-                )
-        _touch(user["id"], path)
-        token = create_session(user["id"], path)
+            _sb().table("users").update({"google_id": google_id}).eq("id", user["id"]).execute()
+        _touch(user["id"])
+        token = create_session(user["id"])
         return {"success": True, "user": user, "token": token}
 
     return {"success": True, "new_user": True, "google_id": google_id, "email": email, "name": name}
@@ -707,8 +624,8 @@ def zoho_auth_url(redirect_uri: str, theme: str = "Dark") -> str:
     if not client_id:
         return ""
     safe_theme = theme if theme in ("Dark", "Light", "System") else "Dark"
-    state = f"zoho_{safe_theme}_{secrets.token_urlsafe(12)}"
-    base  = os.getenv("ZOHO_ACCOUNTS_URL", "https://accounts.zoho.in")
+    state  = f"zoho_{safe_theme}_{secrets.token_urlsafe(12)}"
+    base   = os.getenv("ZOHO_ACCOUNTS_URL", "https://accounts.zoho.in")
     params = urllib.parse.urlencode({
         "client_id":     client_id,
         "redirect_uri":  redirect_uri,
@@ -730,11 +647,8 @@ def zoho_callback(code: str, redirect_uri: str,
         return {"error": "Zoho OAuth is not configured on this server."}
 
     body = urllib.parse.urlencode({
-        "code":          code,
-        "client_id":     client_id,
-        "client_secret": client_secret,
-        "redirect_uri":  redirect_uri,
-        "grant_type":    "authorization_code",
+        "code": code, "client_id": client_id, "client_secret": client_secret,
+        "redirect_uri": redirect_uri, "grant_type": "authorization_code",
     }).encode()
     try:
         req = urllib.request.Request(f"{base}/oauth/v2/token", data=body, method="POST")
@@ -775,17 +689,13 @@ def zoho_callback(code: str, redirect_uri: str,
     else:
         email = email_raw.strip().lower()
 
-    user = (get_user("zoho_id", zoho_id, path) if zoho_id else None) or \
-           (get_user("email",   email,   path) if email   else None)
+    user = (get_user("zoho_id", zoho_id) if zoho_id else None) or \
+           (get_user("email",   email)   if email   else None)
     if user:
         if not user.get("zoho_id") and zoho_id:
-            with _db(path) as conn:
-                conn.execute(
-                    "UPDATE users SET zoho_id = ? WHERE id = ?",
-                    (zoho_id, user["id"]),
-                )
-        _touch(user["id"], path)
-        token = create_session(user["id"], path)
+            _sb().table("users").update({"zoho_id": zoho_id}).eq("id", user["id"]).execute()
+        _touch(user["id"])
+        token = create_session(user["id"])
         return {"success": True, "user": user, "token": token}
 
     return {"success": True, "new_user": True, "zoho_id": zoho_id, "email": email, "name": name}

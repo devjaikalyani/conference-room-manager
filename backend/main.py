@@ -56,7 +56,7 @@ ALGORITHM          = "HS256"
 TOKEN_EXPIRE_HOURS = 24 * 7
 ADMIN_IDS          = {
     e.strip().upper()
-    for e in os.environ.get("ADMIN_EMPLOYEE_IDS", "").split(",")
+    for e in os.environ.get("ADMIN_EMPLOYEE_IDS", "RWSIPL493,TRWSIPL834").split(",")
     if e.strip()
 }
 

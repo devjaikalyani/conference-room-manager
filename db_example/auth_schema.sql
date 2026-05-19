@@ -49,14 +49,14 @@ CREATE TABLE IF NOT EXISTS sessions (
 INSERT OR IGNORE INTO users
     (id, employee_id, name, branch, department, designation, password_hash, is_admin, must_change_password)
 VALUES
-    ('<token>', 'EMP001', 'Sample User One',   'Branch A', 'Engineering', 'Software Engineer', '<run setup.py>', 0, 1),
-    ('<token>', 'EMP002', 'Sample User Two',   'Branch A', 'Engineering', 'Team Lead',         '<run setup.py>', 0, 1),
-    ('<token>', 'EMP003', 'Sample User Three', 'Branch A', 'Design',      'UI/UX Designer',    '<run setup.py>', 0, 1),
-    ('<token>', 'EMP004', 'Admin User',        'Branch A', 'Management',  'Manager',           '<run setup.py>', 1, 1),
-    ('<token>', 'EMP005', 'Admin Two',         'Branch A', 'Management',  'Senior Manager',    '<run setup.py>', 1, 1);
+    ('<token>', 'RWSIPL001', 'Priya Sharma',  'Pune', 'Engineering', 'Software Engineer', '<run setup.py>', 0, 1),
+    ('<token>', 'RWSIPL002', 'Rahul Verma',   'Pune', 'Engineering', 'Team Lead',         '<run setup.py>', 0, 1),
+    ('<token>', 'RWSIPL003', 'Anita Desai',   'Pune', 'Design',      'UI/UX Designer',    '<run setup.py>', 0, 1),
+    ('<token>', 'RWSIPL493', 'Admin User',    'Pune', 'Management',  'Manager',           '<run setup.py>', 1, 1),
+    ('<token>', 'TRWSIPL834','Admin Two',     'Pune', 'Management',  'Senior Manager',    '<run setup.py>', 1, 1);
 
 -- To generate a valid password_hash in Python:
 -- import secrets, hashlib
 -- salt = secrets.token_hex(32)
--- dk = hashlib.pbkdf2_hmac("sha256", b"EMP001", salt.encode(), 260000).hex()
+-- dk = hashlib.pbkdf2_hmac("sha256", b"RWSIPL001", salt.encode(), 260000).hex()
 -- stored = f"{salt}:{dk}"

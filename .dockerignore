@@ -1,0 +1,13 @@
+.env
+.env.*
+*.env
+.git
+__pycache__/
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+mobile/
+backend/
+.vscode/
+.streamlit/secrets.toml
