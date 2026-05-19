@@ -2363,26 +2363,6 @@ def _render_admin_panel(auth_user: dict, key_prefix: str = "") -> None:
 def _render_footer() -> None:
     st.markdown("""
     <div class="crm-footer">
-        <div class="crm-footer-title">Tech Stack</div>
-        <div class="crm-footer-groups">
-            <div class="crm-footer-group">
-                <div class="crm-footer-group-label">Backend</div>
-                <div class="crm-footer-row">
-                    <span class="footer-badge footer-badge-py">Python 3.12</span>
-                    <span class="footer-badge footer-badge-st">Streamlit</span>
-                    <span class="footer-badge footer-badge-api">FastAPI</span>
-                    <span class="footer-badge footer-badge-db">SQLite</span>
-                </div>
-            </div>
-            <div class="crm-footer-group">
-                <div class="crm-footer-group-label">Mobile &amp; PWA</div>
-                <div class="crm-footer-row">
-                    <span class="footer-badge footer-badge-rn">React Native</span>
-                    <span class="footer-badge footer-badge-expo">Expo</span>
-                    <span class="footer-badge footer-badge-pwa">PWA</span>
-                </div>
-            </div>
-        </div>
         <div class="crm-footer-divider"></div>
         <div class="crm-footer-copy">© 2026 Rite Water Solutions &nbsp;·&nbsp; Conference Room Manager</div>
     </div>
